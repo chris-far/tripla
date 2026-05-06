@@ -26,7 +26,7 @@ class Api::V1::PricingControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "should return error when rate API fails" do
-    mock_response = OpenStruct.new(success?: false, body: { 'error' => 'Rate not found' })
+    mock_response = OpenStruct.new(success?: false, body: { 'error' => 'Rate not found' }.to_json)
 
     RateApiClient.stub(:get_rate, mock_response) do
       get api_v1_pricing_url, params: {
@@ -107,5 +107,53 @@ class Api::V1::PricingControllerTest < ActionDispatch::IntegrationTest
 
     json_response = JSON.parse(@response.body)
     assert_includes json_response["error"], "Invalid room"
+  end
+
+  test "should return cached rate on subsequent requests" do
+    mock_response = OpenStruct.new(
+      success?: true,
+      body: { 'rates' => [
+        { 'period' => 'Summer', 'hotel' => 'FloatingPointResort', 'room' => 'SingletonRoom', 'rate' => '15000' }
+      ]}.to_json
+    )
+
+    with_memory_cache do
+      call_count = 0
+      RateApiClient.stub(:get_rate, ->(**_) { call_count += 1; mock_response }) do
+        2.times do
+          get api_v1_pricing_url, params: { period: "Summer", hotel: "FloatingPointResort", room: "SingletonRoom" }
+          assert_response :success
+        end
+        assert_equal 1, call_count
+      end
+    end
+  end
+
+  test "should fetch fresh rate after cache TTL expires" do
+    mock_response = OpenStruct.new(
+      success?: true,
+      body: { 'rates' => [
+        { 'period' => 'Summer', 'hotel' => 'FloatingPointResort', 'room' => 'SingletonRoom', 'rate' => '15000' }
+      ]}.to_json
+    )
+
+    with_memory_cache do
+      call_count = 0
+      RateApiClient.stub(:get_rate, ->(**_) { call_count += 1; mock_response }) do
+        get api_v1_pricing_url, params: { period: "Summer", hotel: "FloatingPointResort", room: "SingletonRoom" }
+        assert_equal 1, call_count
+
+        travel_to 7.minutes.from_now do
+          get api_v1_pricing_url, params: { period: "Summer", hotel: "FloatingPointResort", room: "SingletonRoom" }
+          assert_equal 2, call_count
+        end
+      end
+    end
+  end
+
+  private
+
+  def with_memory_cache
+    Rails.stub(:cache, ActiveSupport::Cache::MemoryStore.new) { yield }
   end
 end
