@@ -2,9 +2,9 @@ module Api::V1
   class PricingService < BaseService
     include SemanticLogger::Loggable
 
-    MAX_RETRIES = 1
+    MAX_RETRIES = 2
     MAX_RETRY_DELAY = 30
-    RATE_CACHE_TTL = 0.01.minutes
+    RATE_CACHE_TTL = 5.minutes
     RETRYABLE_STATUS_CODES = [408, 429, 500, 502, 503, 504].freeze
     RETRYABLE_EXCEPTIONS = [
       Net::OpenTimeout,
