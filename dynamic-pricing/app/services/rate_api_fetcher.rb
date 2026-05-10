@@ -1,5 +1,6 @@
 class RateApiFetcher
   include SemanticLogger::Loggable
+  include RateHashBuilder
 
   MAX_RETRIES = ENV.fetch("RATE_API_MAX_RETRIES", 2).to_i
   MAX_RETRY_DELAY = ENV.fetch("RATE_API_MAX_RETRY_DELAY_SECONDS", 30).to_i
@@ -145,10 +146,6 @@ class RateApiFetcher
 
   def to_result(outcome, rates, failed_rates = [])
     { outcome: outcome, rates: rates, failed_rates: failed_rates }
-  end
-
-  def to_rate_hash(rate_key, rate: nil, status: nil, error: nil)
-    { period: rate_key.period, hotel: rate_key.hotel, room: rate_key.room, rate: rate, status: status, error: error }.compact
   end
 
   def retry_delay(retries)
