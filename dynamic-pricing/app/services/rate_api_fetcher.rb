@@ -50,7 +50,7 @@ class RateApiFetcher
       sleep delay
     end
 
-    failed_rates = keys_to_fetch.map { |key| to_rate_hash(key, error: "Rate not available", status: "error") }
+    failed_rates = keys_to_fetch.map { |key| to_rate_hash(key, error: "Rate not available", status: RateStatus::ERROR) }
     final_outcome = accumulated_rates.any? ? PricingOutcome::PARTIAL_SUCCESS : result[:outcome]
 
     logger.error("Failed to retrieve rates from Rates API", event: "rate_api_fetch_failed",
@@ -135,7 +135,7 @@ class RateApiFetcher
       matched = raw_rates.find { |r| r["period"] == key.period && r["hotel"] == key.hotel && r["room"] == key.room }
 
       if matched && !matched["rate"].nil?
-        rates << to_rate_hash(key, rate: matched["rate"], status: "success")
+        rates << to_rate_hash(key, rate: matched["rate"], status: RateStatus::SUCCESS)
       else
         failed_keys << key
       end
