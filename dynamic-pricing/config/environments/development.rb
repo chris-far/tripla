@@ -20,7 +20,7 @@ Rails.application.configure do
   # Enable/disable caching. By default caching is disabled.
   # Run rails dev:cache to toggle caching.
   if Rails.root.join("tmp/caching-dev.txt").exist?
-    config.cache_store = :memory_store
+    config.cache_store = :file_store, "tmp/cache.txt"
     config.public_file_server.headers = {
       "Cache-Control" => "public, max-age=#{2.days.to_i}"
     }
@@ -64,4 +64,5 @@ Rails.application.configure do
   # Configure Semantic Logger
   config.rails_semantic_logger.format = :default
   config.rails_semantic_logger.ap_options = { multiline: true, index: false }
+  config.log_tags = [ :request_id ]
 end

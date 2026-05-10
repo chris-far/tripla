@@ -58,5 +58,5 @@ docker-compose*
 .dockerignore
 
 # Documentation
-README.md
+README.original.md
 *.md

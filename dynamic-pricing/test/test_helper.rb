@@ -3,6 +3,11 @@ require_relative "../config/environment"
 require "rails/test_help"
 require "minitest/mock"
 
+# Prevent real sleep during retries in tests
+class RateApiFetcher
+  def sleep(_); end
+end
+
 class ActiveSupport::TestCase
   # Run tests in parallel with specified workers
   parallelize(workers: 1)

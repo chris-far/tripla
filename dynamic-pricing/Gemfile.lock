@@ -93,6 +93,10 @@ GEM
     debug (1.11.0)
       irb (~> 1.10)
       reline (>= 0.3.8)
+    dotenv (3.2.0)
+    dotenv-rails (3.2.0)
+      dotenv (= 3.2.0)
+      railties (>= 6.1)
     drb (2.2.3)
     erb (5.0.2)
     erubi (1.13.1)
@@ -232,6 +236,7 @@ DEPENDENCIES
   amazing_print
   bootsnap
   debug
+  dotenv-rails
   httparty
   listen (~> 3.3)
   puma (>= 5.0)

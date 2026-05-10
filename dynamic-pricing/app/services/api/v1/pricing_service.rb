@@ -1,173 +1,90 @@
 module Api::V1
   class PricingService < BaseService
     include SemanticLogger::Loggable
+    attr_reader :outcome, :message, :rates
 
-    MAX_RETRIES = 2
-    MAX_RETRY_DELAY = 30
-    RATE_CACHE_TTL = 5.minutes
-    RETRYABLE_STATUS_CODES = [408, 429, 500, 502, 503, 504].freeze
-    RETRYABLE_EXCEPTIONS = [
-      Net::OpenTimeout,
-      Net::ReadTimeout,
-      Errno::ECONNREFUSED,
-      Errno::ECONNRESET
-    ].freeze
+UNSUCCESSFUL_OUTCOMES = [PricingOutcome::FAILURE, PricingOutcome::ERROR].freeze
 
-    def initialize(request:)
-      @request = request
+    def initialize(pricing_params:)
+      @keys = Array(pricing_params).map { |p| RateKey.new(period: p.period, hotel: p.hotel, room: p.room) }.uniq
     end
 
     def run
-      logger.tagged(period: @request.period, hotel: @request.hotel, room: @request.room) do
+      logger.tagged(*@keys.map { |k| { period: k.period, hotel: k.hotel, room: k.room } }) do
         get_pricing
       end
+    end
+
+    def valid?
+      super && !UNSUCCESSFUL_OUTCOMES.include?(@outcome)
     end
 
     private
 
     def get_pricing
-      cached = Rails.cache.read(rate_cache_key)
+      cached_rates = read_from_cache_and_record_access(@keys)
+      logger.info("Cache hits", event: "cache_hit", count: cached_rates.size, metric: "pricing.cache.hits") if cached_rates.any?
 
-      if cached
-        @result = cached[:rate]
-        logger.info("Returning cached rate", event: "cache_hit", rate: cached[:rate], metric: "pricing.cache.hits")
+      missing_keys = @keys - cached_rates.keys
+      if missing_keys.empty?
+        @outcome = PricingOutcome::SUCCESS
+        @rates = to_rates_hash(cached_rates)
         return
       end
 
-      logger.info("No cached value found", event: "cache_miss", metric: "pricing.cache.misses")
-      result = fetch_rate_with_retries
+      logger.info("Cache misses", event: "cache_miss", count: missing_keys.size, metric: "pricing.cache.misses")
+      refresh_result = refresh_and_cache_missing_rates(missing_keys, cached_rates)
 
-      unless result[:success]
-        @errors = [result[:error] || 'We\'re sorry, there was a problem retrieving your rates. Please try again later.']
-        return
+      @outcome = get_outcome(cached_rates, refresh_result[:outcome])
+      @message = get_message(@outcome)
+      @rates = to_rates_hash(cached_rates) + refresh_result[:failed_rates] if valid?
+    end
+
+    def refresh_and_cache_missing_rates(missing_keys, cached_rates)
+      refresh_service = RateRefreshService.new(keys: missing_keys)
+      refresh_service.run
+
+      refreshed_rates = refresh_service.result[:rates]
+      if refreshed_rates.any?
+        success_keys = refreshed_rates.map { |r| RateKey.from(r) }
+        cache_entries = read_from_cache_and_record_access(success_keys)
+        cached_rates.merge!(cache_entries)
       end
 
-      Rails.cache.write(rate_cache_key, { rate: result[:rate] }, expires_in: RATE_CACHE_TTL)
-      @result = result[:rate]
-      logger.info("Returning freshly cached rate", event: "rate_cached", rate: result[:rate])
+      refresh_service.result
     end
 
-    def rate_cache_key
-      "pricing/rate/#{@request.period}/#{@request.hotel}/#{@request.room}"
+    def read_from_cache_and_record_access(keys)
+      cache_entries = RateCache.instance.read_multi(keys)
+      RateCache.instance.record_access(keys)
+      cache_entries
     end
 
-    def fetch_rate_with_retries
-      max_attempts = MAX_RETRIES + 1
-      retries = 0
+    def get_outcome(results, refresh_outcome)
+      missing = @keys - results.keys
 
-      max_attempts.times do
-        result = fetch_and_extract_rate
+      if missing.empty?
+        PricingOutcome::SUCCESS
+      elsif results.any?
+        PricingOutcome::PARTIAL_SUCCESS
+      else
+        refresh_outcome
+      end
+    end
 
-        if result[:success]
-          logger.info("Successfully retrieved rate from Rates API", event: "rate_api_fetch_success", metric: "pricing.api.successes", rate: result[:rate])
-          return result
+    def get_message(outcome)
+        case outcome
+        when PricingOutcome::PARTIAL_SUCCESS then "Some rates are currently unavailable"
+        when PricingOutcome::FAILURE then "Rates are temporarily unavailable"
+        when PricingOutcome::ERROR then "Pricing system is temporarily unavailable"
+        else nil
         end
-
-        if retries < MAX_RETRIES && result[:retryable]
-          retries += 1
-          delay_seconds = retry_delay(retries)
-
-          logger.warn("Retrying Rates API call", event: "rate_api_fetch_retry", attempt: retries+1, max_attempts: max_attempts, delay_seconds: delay_seconds.round(2), reason: result[:reason])
-          sleep delay_seconds
-          next
-        end
-
-        logger.warn("Failed to retrieve rates from Rates API", event: "rate_api_fetch_failed", metric: "pricing.api.failures", attempts: retries+1, max_attempts: max_attempts, reason: result[:reason])
-        return result
-      end
     end
 
-    def retry_delay(retries)
-      base_delay = 0.5
-      exponential_delay = 2**(retries-1)
-      jitter = rand(0.5..1.5).to_f
-      actual_delay = base_delay * exponential_delay + jitter
-      [actual_delay, MAX_RETRY_DELAY].min
-    end
-
-    def fetch_and_extract_rate
-      begin
-        response = nil
-        logger.measure_info("Fetching rate from Rates API", payload: {event: "rate_api_fetch"}, metric: "pricing.api.fetch_duration") do
-          response = RateApiClient.get_rate(period: @request.period, hotel: @request.hotel, room: @request.room)
-        end
-      rescue *RETRYABLE_EXCEPTIONS => e
-        return {
-          retryable: true,
-          reason: "Rates API threw an exception: #{e.message}"
-        }
+    def to_rates_hash(cached_rates)
+      cached_rates.map do |key, entry|
+        { period: key.period, hotel: key.hotel, room: key.room, rate: entry[:rate], status: "success", valid_until: entry[:valid_until] }
       end
-
-      begin
-        parsed_body = JSON.parse(response.body)
-      rescue JSON::ParserError => e
-        return{
-          retryable: false,
-          reason: "Rates API returned invalid JSON: #{e.message}"
-        }
-      end
-
-      error = parsed_body['error']
-      error_with_fallback = error || 'Unknown error'
-
-      status_code = response.code&.to_i
-      if RETRYABLE_STATUS_CODES.include?(status_code)
-        return {
-          retryable: true,
-          reason: "Rates API returned status code #{status_code}: #{error_with_fallback}",
-          error: error
-        }
-      end
-
-      unless response.success?
-        return {
-          retryable: false,
-          reason: "Rates API returned unsuccessful response: #{error_with_fallback}",
-          error: error
-        }
-      end
-
-      if parsed_body.key?('status') && parsed_body['status'] == 'error'
-        message = parsed_body['message'] || error_with_fallback
-        return {
-          retryable: true,
-          reason: "Rates API returned error: #{message}",
-          error: error
-        }
-      end
-
-      rates = parsed_body['rates']
-      unless rates.is_a?(Array) && rates.any?
-        return {
-          retryable: true,
-          reason: "Rates API did not return any rates: #{error_with_fallback}",
-          error: error
-        }
-      end
-
-      rate = extract_rate(rates)
-      if rate.nil?
-        return {
-          retryable: true,
-          reason: "Rates API returned a null rate",
-          error: error
-        }
-      end
-
-      {
-        success: true,
-        rate: rate
-      }
-    end
-
-    def extract_rate(rates)
-      matched_rate = rates.detect do |rate|
-        rate['period'] == @request.period &&
-          rate['hotel'] == @request.hotel &&
-          rate['room'] == @request.room
-      end
-
-      matched_rate&.dig('rate')
     end
   end
 end
