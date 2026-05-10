@@ -12,7 +12,7 @@ class RateCache
   def read_multi(keys)
     keyed = keys.index_by { |key| rate_key(key) }
     found = Rails.cache.read_multi(*keyed.keys)
-    found.each_with_object({}) { |(string_key, cached), h| h[keyed[string_key]] = { rate: cached[:rate], valid_until: cached[:valid_until] } }
+    found.each_with_object({}) { |(string_key, cached), h| h[keyed[string_key]] = { rate: cached[:rate], valid_until: cached[:valid_until] } if cached }
   end
 
   def record_access(keys, window: ACTIVE_REQUEST_WINDOW)

@@ -56,7 +56,7 @@ UNSUCCESSFUL_OUTCOMES = [PricingOutcome::FAILURE, PricingOutcome::ERROR].freeze
 
     def read_from_cache_and_record_access(keys)
       cache_entries = RateCache.instance.read_multi(keys)
-      RateCache.instance.record_access(keys)
+      RateCache.instance.record_access(cache_entries.keys)
       cache_entries
     end
 
