@@ -1,4 +1,5 @@
 class RefreshRateJob < ApplicationJob
+  include SemanticLogger::Loggable
   queue_as :default
 
   INTERVAL = ENV.fetch("REFRESH_RATE_JOB_INTERVAL_SECONDS", 30).to_i.seconds
@@ -12,7 +13,11 @@ class RefreshRateJob < ApplicationJob
 
   def perform
     to_refresh = ALL_RATE_KEYS.select { |key| needs_refresh?(key) }
-    RateRefreshService.new(keys: to_refresh).run if to_refresh.any?
+
+    if to_refresh.any?
+      logger.info("Stale rates detected, proceeding to refresh", count: to_refresh.size, rates: to_refresh.map(&:to_h))
+      RateRefreshService.new(keys: to_refresh).run
+    end
   ensure
     self.class.set(wait: INTERVAL).perform_later
   end

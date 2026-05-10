@@ -52,7 +52,7 @@ class RateApiFetcher
     failed_rates = keys_to_fetch.map { |key| to_rate_hash(key, error: "Rate not available", status: "error") }
     final_outcome = accumulated_rates.any? ? PricingOutcome::PARTIAL_SUCCESS : result[:outcome]
 
-    logger.warn("Failed to retrieve rates from Rates API", event: "rate_api_fetch_failed",
+    logger.error("Failed to retrieve rates from Rates API", event: "rate_api_fetch_failed",
                 metric: "pricing.rate_api.failure", attempts: retries + 1, max_attempts: max_attempts,
                 count: failed_rates.size, reason: result[:reason], detail: result[:detail])
 
@@ -78,43 +78,49 @@ class RateApiFetcher
     end
     { response: response }
   rescue *RETRYABLE_EXCEPTIONS => e
-    { error: true, retryable: true, reason: "Rates API threw an exception", detail: e.message, outcome: PricingOutcome::ERROR }
+    { error: true, retryable: true, reason: "Rates API threw an exception", detail: exception_detail(e), outcome: PricingOutcome::ERROR }
   end
 
   def parse_response(response)
     status_code = response.code&.to_i
+    body = JSON.parse(response.body)
+    detail = body["message"] || body["error"]
 
     if RETRYABLE_STATUS_CODES.include?(status_code)
-      return { error: true, retryable: true, reason: "Rates API returned status code #{status_code}", outcome: PricingOutcome::ERROR }
+      return { error: true, retryable: true, reason: "Rates API returned status code #{status_code}", detail: detail, outcome: PricingOutcome::ERROR }
     end
 
     unless response.success?
-      return { error: true, retryable: false, reason: "Rates API returned unsuccessful response", outcome: PricingOutcome::ERROR }
+      return { error: true, retryable: false, reason: "Rates API returned unsuccessful response", detail: detail || "Status code #{status_code}", outcome: PricingOutcome::ERROR }
     end
 
-    body = JSON.parse(response.body)
-
     if body["status"] == "error"
-      return { error: true, retryable: true, reason: "Rates API returned a status of 'error'", detail: body["message"] || body["error"], outcome: PricingOutcome::ERROR }
+      return { error: true, retryable: true, reason: "Rates API returned a status of 'error'", detail: detail, outcome: PricingOutcome::ERROR }
     end
 
     { body: body }
   rescue JSON::ParserError => e
-    { error: true, retryable: false, reason: "Rates API returned invalid JSON", detail: e.message, outcome: PricingOutcome::ERROR }
+    { error: true, retryable: false, reason: "Rates API returned invalid JSON", detail: exception_detail(e), outcome: PricingOutcome::ERROR }
+  end
+
+  def exception_detail(e)
+    "#{e.class}: #{e.message}"
   end
 
   def extract_from_body(rate_keys, body)
     raw_rates = body["rates"]
     unless raw_rates.is_a?(Array) && raw_rates.any?
-      return { retryable: true, reason: "Rates API did not return any rates", outcome: PricingOutcome::ERROR }
+      return { retryable: true, reason: "Rates API did not return any rates", detail: "No 'rates' array found in JSON body",
+               outcome: PricingOutcome::ERROR }
     end
 
     extracted = extract_rates(rate_keys, raw_rates)
+    failed_keys = extracted[:failed_keys]
 
-    if extracted[:failed_keys].any?
+    if failed_keys.any?
       outcome = extracted[:rates].any? ? PricingOutcome::PARTIAL_SUCCESS : PricingOutcome::FAILURE
-      return { retryable: true, rates: extracted[:rates], failed_keys: extracted[:failed_keys],
-               reason: "Rates API returned with missing or invalid rates", outcome: outcome }
+      return { retryable: true, rates: extracted[:rates], failed_keys: failed_keys,
+               reason: "Rates API returned with missing or nil rates", detail: failed_keys.map(&:to_h), outcome: outcome }
     end
 
     { success: true, rates: extracted[:rates], outcome: PricingOutcome::SUCCESS }
@@ -147,7 +153,7 @@ class RateApiFetcher
 
   def retry_delay(retries)
     base_delay = 0.5
-    exponential_delay = 2**(retries - 1)
+    exponential_delay = 2 ** (retries - 1)
     jitter = rand(0.5..1.5).to_f
     actual_delay = base_delay * exponential_delay + jitter
     [actual_delay, MAX_RETRY_DELAY].min
