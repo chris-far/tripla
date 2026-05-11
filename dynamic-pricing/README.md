@@ -75,7 +75,7 @@ If only 10 of 36 rates are actively requested, demand-driven costs are roughly `
 
 ### Configuration
 
-Key ENV vars (see `.env.development`):
+Key ENV vars:
 
 | Variable | Default | Description                                                                                                                                                                                                                                                      |
 |---|---------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
