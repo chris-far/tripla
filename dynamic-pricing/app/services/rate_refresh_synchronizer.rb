@@ -1,5 +1,7 @@
-# This class pulls concurrency synchronization logic out of the RateRefreshService,
+# This class separates concurrency synchronization logic from RateRefreshService,
 # helping to keep it decoupled from actual business logic
+# It's main purpose is to prevent the `Thundering Herd` problem, where a burst of requests
+# comes in either on a cold cache or immediately after a cache entry is evicted.
 class RateRefreshSynchronizer
   include RateHashBuilder
   # One-shot result container. Awaiting threads block on `await` until the fetching

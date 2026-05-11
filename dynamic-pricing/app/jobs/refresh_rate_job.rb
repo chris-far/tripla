@@ -2,6 +2,12 @@ class RefreshRateJob < ApplicationJob
   include SemanticLogger::Loggable
   queue_as :default
 
+  module RefreshPolicy
+    STALE = "stale"
+    STALE_AND_RECENTLY_REQUESTED = "stale_and_recently_requested"
+  end
+
+  REFRESH_POLICY = ENV.fetch("REFRESH_RATE_JOB_REFRESH_POLICY", RefreshPolicy::STALE_AND_RECENTLY_REQUESTED)
   INTERVAL = ENV.fetch("REFRESH_RATE_JOB_INTERVAL_SECONDS", 30).to_i.seconds
   CACHED_RATE_PRE_EXPIRY_WINDOW = ENV.fetch("REFRESH_RATE_JOB_CACHED_RATE_PRE_EXPIRY_WINDOW_SECONDS", 60).to_i.seconds
 
@@ -25,10 +31,19 @@ class RefreshRateJob < ApplicationJob
   private
 
   def needs_refresh?(key)
-    # Only pre-cache a rate if it's stale (expiring soon, or already expired) AND
-    # it's been accessed recently, reflecting recent demand
+    case REFRESH_POLICY
+    when RefreshPolicy::STALE then stale?(key)
+    when RefreshPolicy::STALE_AND_RECENTLY_REQUESTED then stale_and_recently_requested(key)
+    else raise "Invalid refresh policy: #{REFRESH_POLICY}"
+    end
+  end
 
-    RateCache.instance.stale?(key, expiry_buffer: CACHED_RATE_PRE_EXPIRY_WINDOW) &&
-      RateCache.instance.recently_requested?(key)
+  def stale_and_recently_requested(key)
+    stale?(key) && RateCache.instance.recently_requested?(key)
+  end
+
+  def stale?(key)
+    # Expiring within the expiry_buffer window or already expired
+    RateCache.instance.stale?(key, expiry_buffer: CACHED_RATE_PRE_EXPIRY_WINDOW)
   end
 end
