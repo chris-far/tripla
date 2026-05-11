@@ -17,7 +17,7 @@ not have to wait on long-running requests. `stale_and_recently_requested` was ch
 | `stale_and_recently_requested` | Refresh `stale` rates only if accessed by users within the last N seconds |
 
 ### Rationale
-`stale_and_recently_requested` was chosen as the default because it scales cost with actual demand/traffic, not with the size of the parameter space (currently 36 rates). The alternative policy, `stale`, would effectively refresh all rates on a fixed interval (see `Alternative Approaches Considered` below).
+`stale_and_recently_requested` was chosen as the default because it scales cost with actual demand/traffic, not with the size of the parameter space (currently 36 rates). The alternative policy, `stale`, would effectively refresh all rates on a fixed interval (see [Alternative Approaches Considered](#alternative-approaches-considered--trade-offs) below).
 Under the fixed-interval approach, all 36 rates are refreshed every cycle, even if only 5 rates are being actively requested, resulting in 86% of API calls being wasted. Calling the Rates API on a fixed interval works well if making wasteful calls is not an issue, or you
 expect high demand for the entire parameter space at all times.
 
@@ -30,6 +30,7 @@ each rate, that signifies whether the rate was successfully processed or not (se
 ### Logging
 Simple structured logging using the `semantic_logger` gem is used as a starting point for observability and monitoring, supporting ingestion into centralized logging systems such as Splunk and Datadog.
 
+<a id="alternative-approaches-considered"></a>
 ## Alternative Approaches Considered / Trade-offs
 
 ### Naive Caching Driven by User Requests
